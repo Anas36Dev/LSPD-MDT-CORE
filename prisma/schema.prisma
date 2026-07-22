@@ -1,0 +1,1619 @@
+// LSPD MDT — schéma de base de données
+// SGBD : MySQL (XAMPP en local)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7 : l'URL de connexion ne vit plus ici mais dans prisma.config.ts
+// (pour les migrations) et dans l'adapter passé à PrismaClient (pour le runtime).
+datasource db {
+  provider = "mysql"
+}
+
+// ---------------------------------------------------------------------------
+// HIÉRARCHIE & STRUCTURE
+// ---------------------------------------------------------------------------
+
+/// Grade LSPD. `level` sert à toutes les comparaisons de permissions.
+model Rank {
+  id       Int    @id @default(autoincrement())
+  code     String @unique // CHIEF_OF_POLICE, SERGEANT_II, ...
+  name     String // "Sergeant II"
+  level    Int    @unique // 100 = Chief of Police, 5 = Cadet
+  category String // COMMAND | CADRES | SUPERVISION | INVESTIGATION | FIELD | ACADEMY
+  order    Int
+
+  users User[]
+
+  @@index([level])
+}
+
+model Division {
+  id           Int     @id @default(autoincrement())
+  code         String  @unique // METRO, ASD, TD, IAD, PCG, DB, PATROL
+  name         String
+  shortName    String
+  /// Une division cloisonnée n'expose ses dossiers qu'à ses membres (+ Command Staff).
+  isRestricted Boolean @default(false)
+  /// Grade minimum (level) pour être affecté à cette division. Réglable par le
+  /// Command Staff : 37 = Officer I (Patrol), 38 = Officer II (spécialités).
+  minRankLevel Int     @default(38)
+  order        Int
+
+  subDivisions  SubDivision[]
+  divisionRoles DivisionRole[]
+  members       UserDivision[]
+  documents     DivisionDocument[]
+}
+
+model SubDivision {
+  id         Int    @id @default(autoincrement())
+  divisionId Int
+  code       String @unique // METRO_B, METRO_C, METRO_D, METRO_K9, TD_IST, TD_RTS
+  name       String
+  order      Int
+
+  division  Division           @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  members   UserSubDivision[]
+  roles     DivisionRole[]
+  documents DivisionDocument[]
+
+  @@index([divisionId])
+}
+
+/// Rôle interne à une division (Chief of X, Instructor of X, Member of X...).
+/// Stocké en base et non en dur : la liste peut évoluer sans refonte du code.
+model DivisionRole {
+  id            Int  @id @default(autoincrement())
+  divisionId    Int
+  /// Si renseigné, le rôle ne porte que sur cette sous-unité (ex: chef du Platoon D).
+  subDivisionId Int?
+
+  code String @unique // METRO_CHIEF, METRO_PLATOON_INSTRUCTOR, TD_ACADEMY_INSTRUCTOR...
+  name String
+
+  /// Chef de division : droits de superviseur sur tout le périmètre de la division.
+  isDivisionChief Boolean @default(false)
+  /// Responsable d'une sous-unité : droits de superviseur limités à sa sous-unité.
+  isUnitLead      Boolean @default(false)
+  /// Peut encadrer et évaluer des recrues (académie / FTO).
+  canTrain        Boolean @default(false)
+
+  order Int
+
+  division    Division           @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  subDivision SubDivision?       @relation(fields: [subDivisionId], references: [id], onDelete: SetNull)
+  holders     UserDivisionRole[]
+
+  @@index([divisionId])
+}
+
+/// Document diffusé au sein d'une division par un chef ou un instructeur.
+/// `subDivisionId` nul = destiné à toute la division ; sinon = à ce peloton.
+model DivisionDocument {
+  id            Int      @id @default(autoincrement())
+  divisionId    Int
+  subDivisionId Int?
+  title         String
+  content       String   @db.Text
+  fileUrl       String?
+  authorId      Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  division    Division     @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  subDivision SubDivision? @relation(fields: [subDivisionId], references: [id], onDelete: SetNull)
+  author      User         @relation("DivDocAuthor", fields: [authorId], references: [id])
+
+  @@index([divisionId])
+}
+
+/// Note privée de supervision sur un agent, cloisonnée par périmètre de division.
+/// Visible uniquement des superviseurs de ce périmètre et du Command Staff.
+model AgentNote {
+  id           Int      @id @default(autoincrement())
+  subjectId    Int
+  authorId     Int
+  divisionCode String
+  body         String   @db.Text
+  createdAt    DateTime @default(now())
+
+  subject User @relation("AgentNoteSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+  author  User @relation("AgentNoteAuthor", fields: [authorId], references: [id])
+
+  @@index([subjectId])
+  @@index([divisionCode])
+}
+
+/// Qualification transverse, indépendante de la division.
+/// Couvre les certifications PPA (CCW 1/2/3), Lincoln Patrol et l'habilitation IFSC.
+model Certification {
+  id          Int    @id @default(autoincrement())
+  code        String @unique // CCW1_GLOCK, CCW2_MP5, LINCOLN_PATROL, IFSC...
+  name        String
+  /// PPA | PATROL | INSTRUCTOR
+  category    String
+  /// Niveau CCW (1, 2, 3) ; null hors PPA.
+  level       Int?
+  description String @db.Text
+  order       Int    @default(0)
+
+  holders UserCertification[]
+}
+
+/// Décoration décernée par le Command Staff.
+model Medal {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique
+  name        String
+  description String  @db.Text
+  /// Nom d'icône lucide ou chemin d'image.
+  icon        String?
+  /// Couleur d'accent du badge (hex).
+  color       String  @default("#c8a24a")
+  order       Int     @default(0)
+
+  recipients UserMedal[]
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS & AUTHENTIFICATION
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  EXCUSED_ABSENCE // Absence justifiée
+  ADMIN_LEAVE // Congé administratif
+  SUSPENDED
+  DISCHARGED // Licencié
+  RESIGNED // Démissionné
+  DECEASED
+}
+
+/// Statut de service d'un agent, tel qu'annoncé à la radio.
+enum DutyStatus {
+  OFF_DUTY /// Hors service (10-08)
+  AVAILABLE /// Disponible (10-08 pris, en patrouille)
+  BUSY /// Occupé (10-06)
+  ON_SCENE /// Sur intervention (10-23)
+  BREAK /// Pause de service (10-10)
+}
+
+/// Origine de la photo de profil.
+enum AvatarSource {
+  DISCORD // synchronisée depuis Discord
+  MANUAL // définie par un superviseur — prioritaire sur Discord
+}
+
+model User {
+  id           Int    @id @default(autoincrement())
+  firstName    String
+  lastName     String
+  /// prenom.nom@lspd.core — identifiant de connexion
+  email        String @unique
+  passwordHash String
+
+  /// Matricule de l'agent : 2 chiffres, choisis par la hiérarchie.
+  matricule   String @db.VarChar(2)
+  /// Numéro de badge affiché : matricule + 3 chiffres tirés au hasard.
+  /// Exemple : matricule 28 → badge 28597.
+  badgeNumber String @unique @db.VarChar(5)
+
+  rankId Int
+
+  status UserStatus @default(ACTIVE)
+  phone  String?
+  notes  String?    @db.Text
+
+  /// Date de recrutement — sert à calculer les années de service affichées sur le profil.
+  recruitedAt DateTime @default(now())
+
+  /// Classement académique du Rookie, renseigné à la création du profil.
+  promotion         String?
+  recruitmentSession String?
+
+  /// Statut de service, piloté depuis le module Dispatch.
+  /// Par défaut disponible : tout agent actif figure au tableau de dispatch.
+  dutyStatus DutyStatus @default(AVAILABLE)
+  /// Heure de la dernière prise ou fin de service.
+  dutySince  DateTime?
+
+  // --- Discord -------------------------------------------------------------
+  /// ID Discord (snowflake). Requis pour la connexion via Discord.
+  discordId        String?      @unique
+  discordUsername  String?
+  /// Avatar synchronisé depuis Discord.
+  discordAvatarUrl String?
+  /// Dernière synchronisation avatar/pseudo depuis Discord (rafraîchissement auto).
+  discordSyncedAt  DateTime?
+  /// Avatar imposé par un superviseur — prend le pas sur celui de Discord.
+  manualAvatarUrl  String?
+  avatarSource     AvatarSource @default(DISCORD)
+
+  /// Compte technique hors hiérarchie RP : tous droits, sert au bootstrap.
+  isSuperAdmin Boolean @default(false)
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdById Int?
+
+  /// Agent ayant recruté celui-ci (colonne « Matricule Recruteur »).
+  recruiterId Int?
+  /// Parrain de l'agent (colonne « Matricule Parrain »).
+  sponsorId   Int?
+
+  rank         Rank   @relation(fields: [rankId], references: [id])
+  createdBy    User?  @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers User[] @relation("UserCreatedBy")
+  recruiter    User?  @relation("UserRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+  recruited    User[] @relation("UserRecruiter")
+  sponsor      User?  @relation("UserSponsor", fields: [sponsorId], references: [id], onDelete: SetNull)
+  sponsored    User[] @relation("UserSponsor")
+
+  /// Un agent peut appartenir à plusieurs divisions en parallèle.
+  divisions       UserDivision[]
+  divisionRoles   UserDivisionRole[]
+  subDivisions    UserSubDivision[]
+  certifications  UserCertification[]
+  medals          UserMedal[]
+  unionMembership UnionMembership?
+  sessions        Session[]
+  auditLogs       AuditLog[]
+
+  authoredReports       Report[]             @relation("ReportAuthor")
+  reportValidations     ReportValidation[]
+  templatesCreated      ReportTemplate[]
+  warrantsIssued        Warrant[]
+  bolosIssued           Bolo[]
+  announcements         Announcement[]
+  messagesSent          Message[]            @relation("MessageSender")
+  messagesReceived      Message[]            @relation("MessageRecipient")
+  iaCasesOpened         IaCase[]             @relation("IaCaseInvestigator")
+  iaCasesSubject        IaCase[]             @relation("IaCaseSubject")
+  iaCaseNotes           IaCaseNote[]
+  sanctions             Sanction[]           @relation("SanctionSubject")
+  academyDocuments      AcademyDocument[]
+  evaluationsGiven      TraineeEvaluation[]  @relation("EvaluationInstructor")
+  evaluationsGot        TraineeEvaluation[]  @relation("EvaluationTrainee")
+  examsTaken            AcademyExam[]        @relation("ExamCandidate")
+  examsSupervised       AcademyExam[]        @relation("ExamExaminer")
+  divisionDocuments     DivisionDocument[]   @relation("DivDocAuthor")
+  agentNotesReceived    AgentNote[]          @relation("AgentNoteSubject")
+  agentNotesWritten     AgentNote[]          @relation("AgentNoteAuthor")
+  investigationsLed     Investigation[]      @relation("InvestigationLead")
+  investigationNotes    InvestigationNote[]
+  investigationInfos    InvestigationInfo[]
+  academySlotsCreated   AcademyScheduleSlot[] @relation("AcademySlotAuthor")
+  partnershipsAsRookie     Partnership[]     @relation("PartnershipRookie")
+  partnershipsAsInstructor Partnership[]     @relation("PartnershipInstructor")
+  partnershipsCreated      Partnership[]     @relation("PartnershipCreatedBy")
+  partnershipNotes         PartnershipNote[]
+  factionsCreated          Faction[]         @relation("FactionCreatedBy")
+  factionNotes             FactionNote[]
+  dutyShifts               DutyShift[]
+  notifications            Notification[]
+  evidenceFolders          EvidenceFolder[]  @relation("EvidenceAuthor")
+  evidenceItems            EvidenceItem[]    @relation("EvidenceItemAuthor")
+  feedbacks                Feedback[]
+  convocationsReceived     Convocation[]     @relation("ConvocationAgent")
+  convocationsSent         Convocation[]     @relation("ConvocationSummoner")
+  groupMessages            GroupMessage[]
+  channelsCreated          MessageChannel[]  @relation("ChannelCreator")
+  meetingsCreated          WeeklyMeeting[]
+  gradeChanges             WeeklyGradeChange[]
+  meetingEvents            WeeklyMeetingEvent[]
+  lockersCreated           Locker[]             @relation("LockerCreator")
+  lockerDeposits           LockerItem[]         @relation("LockerDepositor")
+  patrolMembership      PatrolMember?
+  patrolsCreated        Patrol[]             @relation("PatrolCreatedBy")
+  defconChanges         DepartmentStatus[]   @relation("DefconSetBy")
+  civilianRecord        Civilian?            @relation("AgentCivilian")
+  casiersAuthored       Civilian[]           @relation("CasierAuthor")
+  casiersValidated      Civilian[]           @relation("CasierValidatedBy")
+  criminalRecordsAuthored CriminalRecord[]   @relation("CriminalRecordAuthor")
+  transferRequests      TransferRequest[]    @relation("TransferApplicant")
+  transferDecisions     TransferRequest[]    @relation("TransferDecider")
+  certificatesIssued    FirearmCertificate[]
+  certificationsAwarded UserCertification[]  @relation("CertificationAwardedBy")
+  medalsAwarded         UserMedal[]          @relation("MedalAwardedBy")
+  avatarsSet            User[]               @relation("AvatarSetBy")
+  avatarSetBy           User?                @relation("AvatarSetBy", fields: [avatarSetById], references: [id], onDelete: SetNull)
+  avatarSetById         Int?
+
+  @@index([rankId])
+  @@index([status])
+  @@index([discordId])
+}
+
+/// Affectation d'un agent à une division. Plusieurs affectations simultanées
+/// sont possibles ; `isPrimary` désigne celle affichée en premier sur le profil.
+model UserDivision {
+  userId     Int
+  divisionId Int
+  isPrimary  Boolean  @default(false)
+  assignedAt DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  division Division @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, divisionId])
+  @@index([divisionId])
+}
+
+model UserMedal {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  medalId     Int
+  awardedById Int?
+  /// Motif de la décoration, affiché publiquement sur le profil.
+  /// Null quand la décoration précède la mise en service du MDT.
+  citation    String?   @db.Text
+  /// Date de remise. Null si elle n'est pas connue — on n'affiche alors rien.
+  awardedAt   DateTime?
+
+  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medal     Medal @relation(fields: [medalId], references: [id], onDelete: Cascade)
+  awardedBy User? @relation("MedalAwardedBy", fields: [awardedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+enum UnionRole {
+  REPRESENTATIVE // Représentant Syndical
+  MEMBER // Adhérent
+}
+
+/// Appartenance syndicale — transverse, indépendante de la division.
+model UnionMembership {
+  userId   Int       @id
+  role     UnionRole @default(MEMBER)
+  joinedAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserDivisionRole {
+  userId         Int
+  divisionRoleId Int
+  assignedAt     DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  divisionRole DivisionRole @relation(fields: [divisionRoleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, divisionRoleId])
+}
+
+/// Un agent Metro peut appartenir à plusieurs pelotons.
+model UserSubDivision {
+  userId        Int
+  subDivisionId Int
+  assignedAt    DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subDivision SubDivision @relation(fields: [subDivisionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, subDivisionId])
+}
+
+model UserCertification {
+  userId          Int
+  certificationId Int
+  awardedById     Int?
+  obtainedAt      DateTime  @default(now())
+  revokedAt       DateTime?
+  notes           String?   @db.Text
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  certification Certification @relation(fields: [certificationId], references: [id], onDelete: Cascade)
+  awardedBy     User?         @relation("CertificationAwardedBy", fields: [awardedById], references: [id], onDelete: SetNull)
+
+  @@id([userId, certificationId])
+}
+
+model Session {
+  id        String   @id
+  userId    Int
+  expiresAt DateTime
+  ip        String?
+  userAgent String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Journal des actions sensibles — indispensable au RP Internal Affairs.
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  action     String // USER_CREATE, USER_SUSPEND, REPORT_DELETE, IA_CASE_VIEW...
+  targetType String?
+  targetId   String?
+  detail     String?  @db.Text
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// RAPPORTS & TEMPLATES
+// ---------------------------------------------------------------------------
+
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+}
+
+model ReportTemplate {
+  id                 Int     @id @default(autoincrement())
+  code               String  @unique
+  name               String
+  description        String? @db.Text
+  /// Division propriétaire ; null = template départemental.
+  divisionId         Int?
+  /// Catégorie : REPORT (rapports) ou COMPLAINT (plaintes & dépositions).
+  category           String  @default("REPORT")
+  /// Préfixe des références des documents produits (ex: REPORT-ARREST, PLAINTE).
+  referencePrefix    String  @default("LSPD")
+  /// Niveau de grade minimum pour utiliser ce template.
+  minRankLevel       Int     @default(37)
+  requiresValidation Boolean @default(true)
+  isActive           Boolean @default(true)
+  icon               String?
+  order              Int     @default(0)
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  versions  ReportTemplateVersion[]
+  reports   Report[]
+}
+
+/// Versionnage : modifier un template ne casse jamais les rapports déjà soumis.
+model ReportTemplateVersion {
+  id         Int      @id @default(autoincrement())
+  templateId Int
+  version    Int
+  /// Définition JSON des champs (type, label, obligatoire, options...).
+  schema     Json
+  createdAt  DateTime @default(now())
+
+  template ReportTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  reports  Report[]
+
+  @@unique([templateId, version])
+}
+
+model Report {
+  id                Int          @id @default(autoincrement())
+  reference         String       @unique // LSPD-2026-000123
+  templateId        Int
+  templateVersionId Int
+  authorId          Int
+  title             String
+  /// Valeurs saisies, conformes au schéma de la version du template.
+  data              Json
+  status            ReportStatus @default(DRAFT)
+
+  /// Signature officielle de l'auteur, apposée au moment de la soumission.
+  authorSignature String?
+
+  incidentAt DateTime?
+  location   String?
+
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  template        ReportTemplate        @relation(fields: [templateId], references: [id])
+  templateVersion ReportTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  author          User                  @relation("ReportAuthor", fields: [authorId], references: [id])
+  validations     ReportValidation[]
+  civilians       ReportCivilian[]
+  vehicles        ReportVehicle[]
+  charges         ReportCharge[]
+  investigations  InvestigationReport[]
+  factions        FactionReport[]
+  casierLinks         CivilianReport[]
+  criminalRecordLinks CriminalRecordReport[]
+
+  @@index([authorId])
+  @@index([status])
+  @@index([templateId])
+}
+
+model ReportValidation {
+  id         Int          @id @default(autoincrement())
+  reportId   Int
+  reviewerId Int
+  decision   ReportStatus
+  comment    String?      @db.Text
+  /// Signature officielle du superviseur, apposée au moment de la décision.
+  signature  String?
+  createdAt  DateTime     @default(now())
+
+  report   Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  reviewer User   @relation(fields: [reviewerId], references: [id])
+
+  @@index([reportId])
+}
+
+model ReportCivilian {
+  reportId   Int
+  civilianId Int
+  role       String // SUSPECT, VICTIM, WITNESS
+
+  report   Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  civilian Civilian @relation(fields: [civilianId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, civilianId, role])
+}
+
+model ReportVehicle {
+  reportId  Int
+  vehicleId Int
+
+  report  Report  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, vehicleId])
+}
+
+model ReportCharge {
+  id          Int     @id @default(autoincrement())
+  reportId    Int
+  penalCodeId Int
+  count       Int     @default(1)
+  notes       String? @db.Text
+
+  report    Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  penalCode PenalCode @relation(fields: [penalCodeId], references: [id])
+
+  @@index([reportId])
+}
+
+// ---------------------------------------------------------------------------
+// BASE CIVILS
+// ---------------------------------------------------------------------------
+
+/// Fiche d'un individu = son casier judiciaire (identité + antécédents).
+model Civilian {
+  id          Int       @id @default(autoincrement())
+  /// Référence unique du casier : CASIER-2026-0001.
+  reference   String    @unique
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime?
+  placeOfBirth String?
+  nationality  String?
+  /// Genre : "Homme" ou "Femme".
+  gender      String?
+  address     String?
+  phone       String?
+  height      String?
+  weight      String?
+  eyeColor    String?
+  hairColor   String?
+  /// Tatouages apparents ? + description éventuelle.
+  hasTattoos         Boolean @default(false)
+  tattoosDescription String?
+  /// Revendication d'un groupuscule (texte libre).
+  groupuscule String?
+  photoUrl    String?
+  notes       String?   @db.Text
+  /// Signalé comme dangereux — affiche un avertissement dans le MDT.
+  isFlagged   Boolean   @default(false)
+  flagReason  String?
+
+  /// Agent rédacteur du casier + sa signature (le casier est un document signé).
+  authorId        Int
+  authorSignature String?
+  /// Validation par un superviseur (Sgt I+).
+  validatedById       Int?
+  validatedAt         DateTime?
+  validationSignature String?
+
+  /// Agent du LSPD correspondant à ce civil, s'il y en a un. Tout agent est
+  /// automatiquement fiché comme civil ; ce lien évite les doublons.
+  agentId Int?  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agent       User? @relation("AgentCivilian", fields: [agentId], references: [id], onDelete: SetNull)
+  author      User  @relation("CasierAuthor", fields: [authorId], references: [id])
+  validatedBy User? @relation("CasierValidatedBy", fields: [validatedById], references: [id], onDelete: SetNull)
+
+  vehicles        Vehicle[]
+  licenses        License[]
+  criminalRecords CriminalRecord[]
+  warrants        Warrant[]
+  bolos           Bolo[]
+  reports         ReportCivilian[]
+  linkedReports   CivilianReport[]
+  firearmCerts    FirearmCertificate[]
+  factions        FactionCivilian[]
+
+  @@index([lastName, firstName])
+  @@index([authorId])
+}
+
+model Vehicle {
+  id          Int     @id @default(autoincrement())
+  plate       String  @unique
+  make        String?
+  model       String?
+  color       String?
+  year        Int?
+  ownerId     Int?
+  isStolen    Boolean @default(false)
+  isImpounded Boolean @default(false)
+  notes       String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   Civilian?       @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  reports ReportVehicle[]
+  bolos   Bolo[]
+
+  @@index([ownerId])
+}
+
+model License {
+  id         Int       @id @default(autoincrement())
+  civilianId Int
+  type       String // DRIVER, FIREARM, HUNTING, PILOT, COMMERCIAL
+  status     String    @default("VALID") // VALID, SUSPENDED, REVOKED, EXPIRED
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime?
+  notes      String?   @db.Text
+
+  civilian Civilian @relation(fields: [civilianId], references: [id], onDelete: Cascade)
+
+  @@index([civilianId])
+}
+
+/// Une infraction du casier judiciaire d'un individu.
+model CriminalRecord {
+  id          Int      @id @default(autoincrement())
+  /// Sous-référence citable : CASIER-2026-0001-01.
+  reference   String?
+  civilianId  Int
+  /// Agent ayant inscrit l'infraction au casier.
+  authorId    Int
+  description String   @db.Text
+  sentence    String?
+  fine        Int?
+  /// Observations supplémentaires libres.
+  observations String? @db.Text
+  occurredAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  civilian Civilian               @relation(fields: [civilianId], references: [id], onDelete: Cascade)
+  author   User                   @relation("CriminalRecordAuthor", fields: [authorId], references: [id])
+  /// Un même fait peut réunir plusieurs motifs (infractions). Vide = hors nomenclature.
+  charges  CriminalRecordCharge[]
+  /// Rapports rattachés à cette infraction (arrestation, interrogatoire…).
+  linkedReports CriminalRecordReport[]
+  /// Renvois vers d'autres infractions du casier (anciennes arrestations).
+  references   CriminalRecordLink[] @relation("RecordRefFrom")
+  referencedBy CriminalRecordLink[] @relation("RecordRefTo")
+
+  @@index([civilianId])
+  @@index([authorId])
+}
+
+/// Motif d'une entrée de casier : lien vers un article du code pénal.
+model CriminalRecordCharge {
+  id               Int @id @default(autoincrement())
+  criminalRecordId Int
+  penalCodeId      Int
+
+  record    CriminalRecord @relation(fields: [criminalRecordId], references: [id], onDelete: Cascade)
+  penalCode PenalCode      @relation(fields: [penalCodeId], references: [id], onDelete: Cascade)
+
+  @@unique([criminalRecordId, penalCodeId])
+  @@index([penalCodeId])
+}
+
+/// Rapport rattaché à un casier (niveau fiche).
+model CivilianReport {
+  civilianId Int
+  reportId   Int
+  linkedAt   DateTime @default(now())
+
+  civilian Civilian @relation(fields: [civilianId], references: [id], onDelete: Cascade)
+  report   Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@id([civilianId, reportId])
+  @@index([reportId])
+}
+
+/// Rapport rattaché à une infraction précise du casier.
+model CriminalRecordReport {
+  criminalRecordId Int
+  reportId         Int
+  linkedAt         DateTime @default(now())
+
+  record CriminalRecord @relation(fields: [criminalRecordId], references: [id], onDelete: Cascade)
+  report Report         @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@id([criminalRecordId, reportId])
+  @@index([reportId])
+}
+
+/// Renvoi entre deux infractions d'un même casier (auto-relation).
+model CriminalRecordLink {
+  fromId Int
+  toId   Int
+
+  from CriminalRecord @relation("RecordRefFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   CriminalRecord @relation("RecordRefTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@id([fromId, toId])
+  @@index([toId])
+}
+
+/// Firearm Security Certificate, délivré par les agents certifiés IFSC.
+model FirearmCertificate {
+  id           Int       @id @default(autoincrement())
+  /// Identité du titulaire saisie librement (la base civile n'est plus requise).
+  subjectName  String    @default("")
+  civilianId   Int?
+  issuedById   Int
+  reference    String    @unique
+  status       String    @default("VALID") // VALID, REVOKED, EXPIRED
+  issuedAt     DateTime  @default(now())
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  revokeReason String?   @db.Text
+
+  civilian Civilian? @relation(fields: [civilianId], references: [id], onDelete: SetNull)
+  issuedBy User      @relation(fields: [issuedById], references: [id])
+
+  @@index([civilianId])
+}
+
+// ---------------------------------------------------------------------------
+// MANDATS & BOLO
+// ---------------------------------------------------------------------------
+
+model Warrant {
+  id         Int       @id @default(autoincrement())
+  reference  String    @unique
+  /// Identité de l'individu visé, saisie librement.
+  subjectName String   @default("")
+  civilianId Int?
+  issuedById Int
+  type       String // ARREST, SEARCH
+  reason     String    @db.Text
+  /// Signature officielle de l'agent émetteur.
+  signature  String?
+  status     String    @default("ACTIVE") // ACTIVE, EXECUTED, CANCELLED, EXPIRED
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  civilian Civilian? @relation(fields: [civilianId], references: [id], onDelete: SetNull)
+  issuedBy User      @relation(fields: [issuedById], references: [id])
+
+  @@index([status])
+}
+
+model Bolo {
+  id          Int      @id @default(autoincrement())
+  reference   String   @unique
+  title       String
+  type        String // PERSON, VEHICLE, OTHER
+  /// Identité de la personne concernée, saisie librement (type PERSON).
+  subjectName String   @default("")
+  description String   @db.Text
+  /// Signature officielle de l'agent émetteur.
+  signature   String?
+  priority    String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  status      String   @default("ACTIVE")
+  civilianId  Int?
+  vehicleId   Int?
+  issuedById  Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  civilian Civilian? @relation(fields: [civilianId], references: [id], onDelete: SetNull)
+  vehicle  Vehicle?  @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  issuedBy User      @relation(fields: [issuedById], references: [id])
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// CODES RADIO & CODE PÉNAL
+// ---------------------------------------------------------------------------
+
+/// Référentiel opérationnel : ten-codes, codes de patrouille, call signs,
+/// alphabet OTAN, catégories d'armement et niveaux DEFCON.
+model RadioCode {
+  id          Int     @id @default(autoincrement())
+  /// TEN_CODE | PATROL_CODE | CALL_SIGN | PHONETIC | WEAPON_CATEGORY | DEFCON
+  category    String
+  code        String
+  label       String
+  description String? @db.Text
+  order       Int     @default(0)
+
+  @@unique([category, code])
+}
+
+// ---------------------------------------------------------------------------
+// ÉTAT DU DÉPARTEMENT
+// ---------------------------------------------------------------------------
+
+/// État opérationnel du département — enregistrement unique (id = 1).
+model DepartmentStatus {
+  id Int @id @default(1)
+  /// Niveau DEFCON en vigueur : 5 (préparation normale) à 1 (état de guerre).
+  defconLevel  Int     @default(5)
+  /// Motif du niveau, affiché à tous les agents.
+  defconReason String? @db.Text
+
+  updatedById Int?
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation("DefconSetBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+// ---------------------------------------------------------------------------
+// DISPATCH & UNITÉS
+// ---------------------------------------------------------------------------
+
+/// Patrouille constituée sur le terrain : un call sign, un numéro et ses agents.
+/// Exemple : ADAM-12, patrouille à deux effectifs.
+model Patrol {
+  id Int @id @default(autoincrement())
+  /// Call sign réglementaire : LINCOLN, ADAM, TANGO, X-Ray, DAVID, K9…
+  callSign String
+  /// Numéro d'unité, libre. ADAM-12, LINCOLN-3…
+  number   String?
+  /// AVAILABLE | BUSY | ON_SCENE | RETURNING
+  status   String  @default("AVAILABLE")
+  /// Zone ou secteur de patrouille.
+  sector   String?
+  notes    String? @db.Text
+  /// Ordre d'affichage sur le tableau de dispatch (glisser-déposer).
+  order    Int     @default(0)
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User?          @relation("PatrolCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members   PatrolMember[]
+
+  @@index([status])
+}
+
+/// Affectation d'un agent à une patrouille.
+/// `userId` est unique : un agent ne peut servir que dans une patrouille à la fois.
+model PatrolMember {
+  patrolId Int
+  userId   Int      @unique
+  /// Chef de bord de la patrouille.
+  isLead   Boolean  @default(false)
+  joinedAt DateTime @default(now())
+
+  patrol Patrol @relation(fields: [patrolId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([patrolId, userId])
+}
+
+/// Vacation de service : temps de présence d'un agent « en service » sur le MDT.
+/// `lastPingAt` est rafraîchi tant que la page reste ouverte ; si l'agent ferme
+/// sa page sans terminer, le temps s'arrête au dernier ping.
+model DutyShift {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  startedAt  DateTime  @default(now())
+  lastPingAt DateTime  @default(now())
+  endedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([startedAt])
+}
+
+/// Notification destinée à un agent (rapport validé, message reçu, candidature…).
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  type      String
+  title     String
+  body      String?   @db.Text
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+/// Dossier de preuves regroupant plusieurs pièces (images ou liens).
+/// Un détective peut le rattacher à une enquête.
+model EvidenceFolder {
+  id              Int      @id @default(autoincrement())
+  reference       String   @unique // PREUVE-2026-0001
+  title           String
+  description     String?  @db.Text
+  authorId        Int
+  investigationId Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  author        User           @relation("EvidenceAuthor", fields: [authorId], references: [id])
+  investigation Investigation? @relation(fields: [investigationId], references: [id], onDelete: SetNull)
+  items         EvidenceItem[]
+
+  @@index([authorId])
+  @@index([investigationId])
+}
+
+/// Retour ou suggestion d'un agent sur l'amélioration du MDT.
+model Feedback {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  type      String   @default("SUGGESTION") // SUGGESTION, BUG, OTHER
+  message   String   @db.Text
+  status    String   @default("NEW") // NEW, REVIEWED
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Canal de discussion personnalisé créé par le Command Staff.
+/// Les 5 canaux prédéfinis restent en code ; ceux-ci s'y ajoutent.
+model MessageChannel {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique
+  name        String
+  /// Codes de grade autorisés (ex: ["SERGEANT_I","LIEUTENANT_I"]).
+  rankCodes     Json
+  /// Identifiants d'agents autorisés en plus des grades.
+  userIds       Json
+  /// Codes de division dont les membres ont accès (ex: ["METRO","IAD"]).
+  divisionCodes Json?
+  /// Codes d'habilitation/certification donnant accès (ex: ["ISTC","IFSC"]).
+  certCodes     Json?
+  createdById   Int?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation("ChannelCreator", fields: [createdById], references: [id], onDelete: SetNull)
+}
+
+/// Message d'un canal de discussion par catégorie de grade.
+model GroupMessage {
+  id        Int      @id @default(autoincrement())
+  channel   String
+  senderId  Int
+  body      String?  @db.Text
+  imageUrl  String?  @db.Text
+  createdAt DateTime @default(now())
+
+  sender User @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([channel, createdAt])
+}
+
+/// Casier physique du poste : les agents y annoncent le dépôt d'objets.
+model Locker {
+  id          Int      @id @default(autoincrement())
+  name        String
+  /// Code d'accès physique du casier (facultatif).
+  accessCode  String?
+  /// Casier fourni par défaut : non supprimable.
+  isDefault   Boolean  @default(false)
+  order       Int      @default(0)
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  createdBy User?        @relation("LockerCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items     LockerItem[]
+}
+
+/// Objet déposé dans un casier, annoncé par un agent.
+model LockerItem {
+  id            Int      @id @default(autoincrement())
+  lockerId      Int
+  label         String
+  quantity      Int?
+  depositedById Int
+  createdAt     DateTime @default(now())
+
+  locker      Locker @relation(fields: [lockerId], references: [id], onDelete: Cascade)
+  depositedBy User   @relation("LockerDepositor", fields: [depositedById], references: [id])
+
+  @@index([lockerId])
+}
+
+/// Récapitulatif d'une réunion hebdomadaire / cérémonie de fin de semaine.
+model WeeklyMeeting {
+  id          Int       @id @default(autoincrement())
+  summary     String    @db.Text
+  /// Date de la réunion de fin de semaine (choisie par le rédacteur).
+  meetingDate DateTime?
+  /// Signature officielle du rédacteur.
+  signature   String?
+  createdById Int
+  createdAt   DateTime  @default(now())
+
+  createdBy    User                 @relation(fields: [createdById], references: [id])
+  gradeChanges WeeklyGradeChange[]
+  events       WeeklyMeetingEvent[]
+}
+
+/// Autre annonce de réunion : avertissement, départ du service ou décès
+/// (affichage seul).
+model WeeklyMeetingEvent {
+  id        Int     @id @default(autoincrement())
+  meetingId Int
+  userId    Int
+  agentName String
+  rankName  String
+  type      String // WARNING | DEPARTURE | DEATH
+  reason    String? @db.Text
+
+  meeting WeeklyMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  agent   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+}
+
+/// Montée / descente de grade annoncée lors d'une réunion (affichage seul,
+/// n'affecte pas le grade réel de l'agent).
+model WeeklyGradeChange {
+  id           Int    @id @default(autoincrement())
+  meetingId    Int
+  userId       Int
+  /// Instantanés pour un affichage stable, même si le grade change ensuite.
+  agentName    String
+  fromRankName String
+  toRankName   String
+  direction    String // PROMOTION | DEMOTION
+
+  meeting WeeklyMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  agent   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Convocation d'un agent dans un bureau ou un lieu précis par un superviseur.
+model Convocation {
+  id             Int       @id @default(autoincrement())
+  agentId        Int
+  summonedById   Int
+  location       String
+  reason         String    @db.Text
+  scheduledAt    DateTime?
+  status         String    @default("PENDING") // PENDING, ACKNOWLEDGED, CANCELLED
+  acknowledgedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  agent      User @relation("ConvocationAgent", fields: [agentId], references: [id], onDelete: Cascade)
+  summonedBy User @relation("ConvocationSummoner", fields: [summonedById], references: [id])
+
+  @@index([agentId, status])
+}
+
+/// Pièce d'un dossier de preuves : image téléversée (fichier serveur) ou lien.
+model EvidenceItem {
+  id        Int      @id @default(autoincrement())
+  folderId  Int
+  kind      String   @default("IMAGE") // IMAGE = fichier téléversé, LINK = lien externe
+  url       String   @db.Text
+  caption   String?
+  addedById Int
+  createdAt DateTime @default(now())
+
+  folder  EvidenceFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  addedBy User           @relation("EvidenceItemAuthor", fields: [addedById], references: [id])
+
+  @@index([folderId])
+}
+
+/// Texte de référence du département : droits Miranda, fiches circulaires,
+/// procédures. Éditable par les superviseurs.
+model ReferenceText {
+  id       Int      @id @default(autoincrement())
+  code     String   @unique
+  title    String
+  /// MIRANDA | PROCEDURE | CIRCULAIRE
+  category String
+  content  String   @db.Text
+  notes    String?  @db.Text
+  order    Int      @default(0)
+
+  updatedAt DateTime @updatedAt
+}
+
+/// Code pénal de l'État de San Andreas.
+model PenalCode {
+  id    Int    @id @default(autoincrement())
+  /// Article : 1.A, 2.O, 5.AE…
+  code  String @unique
+  title String
+  /// CONTRAVENTION | DELIT MINEUR | DELIT MAJEUR | CRIME | CRIME FEDERAL | CRIME FINANCIER
+  category String
+  /// Complément de peine : confiscation, retrait de permis, mise en fourrière…
+  description String? @db.Text
+  /// Amende maximale, en dollars.
+  fine        Int?
+  /// Peine de détention en minutes. Null si aucune peine privative de liberté.
+  jailTime    Int?
+  /// Peine de perpétuité : elle ne se compare pas aux peines chiffrées.
+  isLifeSentence Boolean @default(false)
+  /// L'affaire relève du Department of Justice (colonne « DOJ ? »).
+  requiresDoj    Boolean @default(false)
+  /// Article renvoyé au juge uniquement en cas de cumul avec un délit supérieur.
+  dojOnCumulation Boolean @default(false)
+  /// Ordre d'affichage, tel que dans le document officiel.
+  order       Int     @default(0)
+  points      Int?
+
+  charges         ReportCharge[]
+  criminalRecords CriminalRecordCharge[]
+
+  @@index([category])
+}
+
+// ---------------------------------------------------------------------------
+// ANNONCES & MESSAGERIE
+// ---------------------------------------------------------------------------
+
+model Announcement {
+  id               Int      @id @default(autoincrement())
+  title            String
+  body             String   @db.Text
+  priority         String   @default("NORMAL") // NORMAL, IMPORTANT, URGENT
+  /// null = toutes divisions
+  divisionId       Int?
+  /// Visible par les Cadets et Probationary Officers.
+  visibleToAcademy Boolean  @default(false)
+  isPinned         Boolean  @default(false)
+  authorId         Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  author User @relation(fields: [authorId], references: [id])
+
+  @@index([divisionId])
+}
+
+model Message {
+  id          Int       @id @default(autoincrement())
+  senderId    Int
+  recipientId Int
+  subject     String
+  body        String    @db.Text
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  sender    User @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, readAt])
+}
+
+// ---------------------------------------------------------------------------
+// INTERNAL AFFAIRS
+// ---------------------------------------------------------------------------
+
+model IaCase {
+  id             Int       @id @default(autoincrement())
+  reference      String    @unique
+  subjectId      Int
+  investigatorId Int
+  title          String
+  summary        String    @db.Text
+  severity       String    @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  status         String    @default("OPEN") // OPEN, INVESTIGATING, CLOSED, DISMISSED
+  outcome        String?   @db.Text
+  closedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  subject      User         @relation("IaCaseSubject", fields: [subjectId], references: [id])
+  investigator User         @relation("IaCaseInvestigator", fields: [investigatorId], references: [id])
+  notes        IaCaseNote[]
+  sanctions    Sanction[]
+
+  @@index([status])
+}
+
+model IaCaseNote {
+  id        Int      @id @default(autoincrement())
+  caseId    Int
+  authorId  Int
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  case   IaCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id])
+
+  @@index([caseId])
+}
+
+model Sanction {
+  id        Int       @id @default(autoincrement())
+  subjectId Int
+  caseId    Int?
+  type      String // WARNING, REPRIMAND, SUSPENSION, DEMOTION, TERMINATION
+  reason    String    @db.Text
+  /// Une sanction publique apparaît sur le profil consultable par tous.
+  /// Les sanctions non publiques restent visibles par l'IAD et le Command Staff.
+  isPublic  Boolean   @default(false)
+  startsAt  DateTime  @default(now())
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  subject User    @relation("SanctionSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+  case    IaCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  @@index([subjectId])
+}
+
+// ---------------------------------------------------------------------------
+// BUREAU DES DÉTECTIVES — enquêtes
+// ---------------------------------------------------------------------------
+
+/// Dossier d'enquête du Detective Bureau, rattachable à des rapports existants.
+model Investigation {
+  id        Int       @id @default(autoincrement())
+  reference String    @unique // INV-2026-0001
+  leadId    Int
+  title     String
+  summary   String    @db.Text
+  status    String    @default("OPEN") // OPEN, ACTIVE, CLOSED, ARCHIVED
+  outcome   String?   @db.Text
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  lead            User                   @relation("InvestigationLead", fields: [leadId], references: [id])
+  notes           InvestigationNote[]
+  infos           InvestigationInfo[]
+  reports         InvestigationReport[]
+  factions        FactionInvestigation[]
+  evidenceFolders EvidenceFolder[]
+
+  @@index([status])
+  @@index([leadId])
+}
+
+/// Élément d'information rattaché à une enquête (suspect, indice, lieu…).
+model InvestigationInfo {
+  id              Int      @id @default(autoincrement())
+  investigationId Int
+  label           String
+  content         String   @db.Text
+  authorId        Int
+  createdAt       DateTime @default(now())
+
+  investigation Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  author        User          @relation(fields: [authorId], references: [id])
+
+  @@index([investigationId])
+}
+
+/// Groupuscule / faction s'étant revendiqué en ville, suivi par le Detective Bureau.
+model Faction {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String   @db.Text
+  status      String   @default("ACTIVE") // ACTIVE, WATCHED, DISMANTLED
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy      User?                   @relation("FactionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  notes          FactionNote[]
+  reports        FactionReport[]
+  investigations FactionInvestigation[]
+  civilians      FactionCivilian[]
+
+  @@index([status])
+}
+
+model FactionNote {
+  id        Int      @id @default(autoincrement())
+  factionId Int
+  authorId  Int
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  faction Faction @relation(fields: [factionId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id])
+
+  @@index([factionId])
+}
+
+model FactionReport {
+  factionId Int
+  reportId  Int
+  linkedAt  DateTime @default(now())
+
+  faction Faction @relation(fields: [factionId], references: [id], onDelete: Cascade)
+  report  Report  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@id([factionId, reportId])
+  @@index([reportId])
+}
+
+model FactionInvestigation {
+  factionId       Int
+  investigationId Int
+  linkedAt        DateTime @default(now())
+
+  faction       Faction       @relation(fields: [factionId], references: [id], onDelete: Cascade)
+  investigation Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+
+  @@id([factionId, investigationId])
+  @@index([investigationId])
+}
+
+model FactionCivilian {
+  factionId  Int
+  civilianId Int
+  role       String?
+  linkedAt   DateTime @default(now())
+
+  faction  Faction  @relation(fields: [factionId], references: [id], onDelete: Cascade)
+  civilian Civilian @relation(fields: [civilianId], references: [id], onDelete: Cascade)
+
+  @@id([factionId, civilianId])
+  @@index([civilianId])
+}
+
+model InvestigationNote {
+  id              Int      @id @default(autoincrement())
+  investigationId Int
+  authorId        Int
+  body            String   @db.Text
+  createdAt       DateTime @default(now())
+
+  investigation Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  author        User          @relation(fields: [authorId], references: [id])
+
+  @@index([investigationId])
+}
+
+/// Rattachement d'un rapport existant à une enquête (plusieurs rapports possibles).
+model InvestigationReport {
+  investigationId Int
+  reportId        Int
+  linkedAt        DateTime @default(now())
+
+  investigation Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  report        Report        @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@id([investigationId, reportId])
+  @@index([reportId])
+}
+
+// ---------------------------------------------------------------------------
+// ACADÉMIE
+// ---------------------------------------------------------------------------
+
+/// Promotion académique — liste gérée par le Chief Office ; le nom est reporté
+/// sur le champ `User.promotion` du Rookie affecté.
+model AcademyPromotion {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+/// Binôme de formation : une recrue (Police Officer I) attitrée à un instructeur
+/// (Field Training Officer). Géré par les gradés (Sergeant II et au-dessus).
+model Partnership {
+  id           Int      @id @default(autoincrement())
+  rookieId     Int
+  instructorId Int
+  createdById  Int?
+  createdAt    DateTime @default(now())
+
+  rookie     User @relation("PartnershipRookie", fields: [rookieId], references: [id], onDelete: Cascade)
+  instructor User @relation("PartnershipInstructor", fields: [instructorId], references: [id], onDelete: Cascade)
+  createdBy  User? @relation("PartnershipCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  notes      PartnershipNote[]
+
+  @@index([rookieId])
+  @@index([instructorId])
+}
+
+/// Note sur un binôme. `visibility` : PUBLIC (tous), BOTH (les deux membres),
+/// ROOKIE (la recrue seule) ou INSTRUCTOR (l'instructeur seul). Les gestionnaires
+/// et le Command Staff voient toujours tout.
+model PartnershipNote {
+  id            Int      @id @default(autoincrement())
+  partnershipId Int
+  authorId      Int
+  body          String   @db.Text
+  visibility    String   @default("BOTH")
+  createdAt     DateTime @default(now())
+
+  partnership Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  author      User        @relation(fields: [authorId], references: [id])
+
+  @@index([partnershipId])
+}
+
+/// Créneau récurrent du planning hebdomadaire de l'académie.
+/// `dayOfWeek` : 0 = lundi … 6 = dimanche. `startMin`/`endMin` : minutes depuis
+/// minuit (0-1439). La fenêtre d'affichage court de 12h00 à 06h00 du matin.
+model AcademyScheduleSlot {
+  id          Int      @id @default(autoincrement())
+  dayOfWeek   Int
+  startMin    Int
+  endMin      Int
+  title       String
+  location    String?
+  details     String?  @db.Text
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation("AcademySlotAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([dayOfWeek])
+}
+
+model AcademyCourse {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique
+  title       String
+  description String  @db.Text
+  order       Int     @default(0)
+  isPublished Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents   AcademyDocument[]
+  sessions    AcademySession[]
+  evaluations TraineeEvaluation[]
+}
+
+model AcademyDocument {
+  id        Int      @id @default(autoincrement())
+  courseId  Int?
+  title     String
+  content   String   @db.Text
+  fileUrl   String?
+  authorId  Int
+  /// ALL = visible des rookies et instructeurs ; INSTRUCTORS = instructeurs seuls.
+  visibility String  @default("ALL")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course AcademyCourse? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  author User           @relation(fields: [authorId], references: [id])
+
+  @@index([courseId])
+}
+
+model AcademySession {
+  id        Int       @id @default(autoincrement())
+  courseId  Int?
+  title     String
+  startsAt  DateTime
+  endsAt    DateTime?
+  location  String?
+  maxSeats  Int?
+  notes     String?   @db.Text
+  createdAt DateTime  @default(now())
+
+  course AcademyCourse? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@index([startsAt])
+}
+
+/// Épreuve notée de l'examen de sortie d'académie.
+model AcademyExamSubject {
+  id        Int    @id @default(autoincrement())
+  code      String @unique
+  name      String
+  maxPoints Int
+  order     Int    @default(0)
+
+  scores AcademyExamScore[]
+}
+
+/// Examen de sortie d'académie d'un candidat.
+/// Admission à partir de 80 % — seuil défini par le règlement du département.
+model AcademyExam {
+  id           Int      @id @default(autoincrement())
+  candidateId  Int
+  examinerId   Int?
+  examinedAt   DateTime @default(now())
+  /// Total obtenu, toutes épreuves confondues.
+  totalPoints  Int      @default(0)
+  /// Total maximum possible au moment de l'examen (les épreuves peuvent évoluer).
+  maxPoints    Int      @default(0)
+  /// Pourcentage de réussite, arrondi à l'entier.
+  percentage   Int      @default(0)
+  passed       Boolean  @default(false)
+  comment      String?  @db.Text
+
+  candidate User?              @relation("ExamCandidate", fields: [candidateId], references: [id], onDelete: Cascade, map: "AcademyExam_candidate_fkey")
+  examiner  User?              @relation("ExamExaminer", fields: [examinerId], references: [id], onDelete: SetNull)
+  scores    AcademyExamScore[]
+
+  @@index([candidateId])
+}
+
+model AcademyExamScore {
+  id        Int @id @default(autoincrement())
+  examId    Int
+  subjectId Int
+  points    Int @default(0)
+
+  exam    AcademyExam        @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subject AcademyExamSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, subjectId])
+}
+
+model TraineeEvaluation {
+  id           Int      @id @default(autoincrement())
+  traineeId    Int
+  instructorId Int
+  courseId     Int?
+  score        Int? // 0-100
+  passed       Boolean  @default(false)
+  comment      String   @db.Text
+  createdAt    DateTime @default(now())
+
+  trainee    User           @relation("EvaluationTrainee", fields: [traineeId], references: [id], onDelete: Cascade)
+  instructor User           @relation("EvaluationInstructor", fields: [instructorId], references: [id])
+  course     AcademyCourse? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@index([traineeId])
+}
+
+// ---------------------------------------------------------------------------
+// MUTATIONS
+// ---------------------------------------------------------------------------
+
+model TransferRequest {
+  id            Int       @id @default(autoincrement())
+  applicantId   Int
+  divisionId    Int
+  subDivisionId Int?
+  motivation    String    @db.Text
+  status        String    @default("PENDING") // PENDING, ACCEPTED, REJECTED, WITHDRAWN
+  decisionNote  String?   @db.Text
+  decidedById   Int?
+  decidedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  applicant User  @relation("TransferApplicant", fields: [applicantId], references: [id], onDelete: Cascade)
+  decidedBy User? @relation("TransferDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([divisionId])
+}

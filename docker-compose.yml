@@ -1,0 +1,58 @@
+# =============================================================================
+# LSPD MDT — orchestration complète : base MariaDB + application Next.js.
+#
+#   docker compose up -d --build      # build + démarrage
+#   docker compose logs -f app        # suivre les logs de l'app
+#   docker compose down               # arrêt (les données/volumes sont conservés)
+#
+# Variables surchargeables via un fichier .env (à côté de ce compose) :
+#   DB_PASSWORD, DB_NAME, APP_PORT, APP_URL, SEED_ON_START
+# Les secrets Discord sont lus depuis le même .env (env_file ci-dessous).
+# =============================================================================
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD:-lspd_root}
+      MARIADB_DATABASE: ${DB_NAME:-lspd_mdt}
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Reprend le .env local (secrets Discord, etc.). Les variables ci-dessous
+    # ont la priorité et branchent l'app sur le service `db`.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: mysql://root:${DB_PASSWORD:-lspd_root}@db:3306/${DB_NAME:-lspd_mdt}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SEED_ON_START: ${SEED_ON_START:-true}
+      NODE_ENV: production
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      # Persiste les images uploadées (preuves, chat) hors de l'image.
+      - uploads:/app/public/uploads
+
+volumes:
+  db-data:
+  uploads:

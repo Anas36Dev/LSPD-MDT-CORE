@@ -1,0 +1,28 @@
+-- Casiers physiques + objets déposés.
+CREATE TABLE `Locker` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(191) NOT NULL,
+    `order` INTEGER NOT NULL DEFAULT 0,
+    `createdById` INTEGER NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4;
+
+CREATE TABLE `LockerItem` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `lockerId` INTEGER NOT NULL,
+    `label` VARCHAR(191) NOT NULL,
+    `quantity` INTEGER NULL,
+    `depositedById` INTEGER NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    INDEX `LockerItem_lockerId_idx`(`lockerId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4;
+
+ALTER TABLE `Locker` ADD CONSTRAINT `Locker_createdById_fkey` FOREIGN KEY (`createdById`) REFERENCES `User`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE `LockerItem` ADD CONSTRAINT `LockerItem_lockerId_fkey` FOREIGN KEY (`lockerId`) REFERENCES `Locker`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `LockerItem` ADD CONSTRAINT `LockerItem_depositedById_fkey` FOREIGN KEY (`depositedById`) REFERENCES `User`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE `Locker` ADD COLUMN `accessCode` VARCHAR(191) NULL;
+
+ALTER TABLE `Locker` ADD COLUMN `isDefault` BOOLEAN NOT NULL DEFAULT false;

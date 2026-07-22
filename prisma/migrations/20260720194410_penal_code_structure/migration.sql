@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE `penalcode` ADD COLUMN `dojOnCumulation` BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN `isLifeSentence` BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN `order` INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN `requiresDoj` BOOLEAN NOT NULL DEFAULT false;

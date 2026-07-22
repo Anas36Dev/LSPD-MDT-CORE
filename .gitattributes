@@ -1,0 +1,9 @@
+# Normalise les fins de ligne. Les scripts shell et fichiers Docker DOIVENT
+# rester en LF, sinon le build/exécution dans le conteneur Linux casse.
+* text=auto
+
+*.sh            text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf

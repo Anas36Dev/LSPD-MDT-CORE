@@ -1,26 +1,98 @@
 @import "tailwindcss";
 
+/*
+ * Thème « sombre tactique » du MDT.
+ * Anthracite profond, bleu LSPD et or de commandement.
+ */
+@theme {
+  --color-ink-950: #070a0f;
+  --color-ink-900: #0b0f16;
+  --color-ink-850: #10151f;
+  --color-ink-800: #151b27;
+  --color-ink-700: #1d2534;
+  --color-ink-600: #2a3446;
+  --color-ink-500: #3d4a61;
+
+  --color-mist-500: #6b7a94;
+  --color-mist-300: #9aa8bf;
+  --color-mist-100: #d6dEEA;
+
+  --color-badge-600: #0b4da2;
+  --color-badge-500: #1565d8;
+  --color-badge-400: #3b86f0;
+  --color-badge-300: #7db1f7;
+
+  --color-gold-600: #a8842f;
+  --color-gold-500: #c8a24a;
+  --color-gold-400: #e0c076;
+
+  --color-alert-600: #a3261f;
+  --color-alert-500: #d23a30;
+  --color-warn-500: #d98c26;
+  --color-ok-500: #2f9e63;
+
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-ink-950);
+  color: var(--color-mist-100);
+  font-family: var(--font-sans);
+  /* Trame diagonale discrète, façon terminal embarqué. */
+  background-image:
+    radial-gradient(
+      ellipse 80% 50% at 50% -20%,
+      rgb(21 101 216 / 0.13),
+      transparent
+    ),
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 22px,
+      rgb(255 255 255 / 0.012) 22px 23px
+    );
+  background-attachment: fixed;
+}
+
+/* Barres de défilement assorties au thème */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-600) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-ink-600);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-ink-500);
+}
+
+/* Anneau de focus homogène et accessible */
+:focus-visible {
+  outline: 2px solid var(--color-badge-400);
+  outline-offset: 2px;
+}
+
+@utility panel {
+  background-color: color-mix(in oklab, var(--color-ink-900) 88%, transparent);
+  border: 1px solid var(--color-ink-700);
+  border-radius: 0.75rem;
+}
+
+@utility label-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--color-mist-500);
 }
