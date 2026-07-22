@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `recruiterId` INTEGER NULL,
+ALTER TABLE `User` ADD COLUMN `recruiterId` INTEGER NULL,
     ADD COLUMN `sponsorId` INTEGER NULL,
     ALTER COLUMN `matricule` DROP DEFAULT;
 

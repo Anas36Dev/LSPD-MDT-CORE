@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `dutySince` DATETIME(3) NULL,
+ALTER TABLE `User` ADD COLUMN `dutySince` DATETIME(3) NULL,
     ADD COLUMN `dutyStatus` ENUM('OFF_DUTY', 'AVAILABLE', 'BUSY', 'ON_SCENE', 'BREAK') NOT NULL DEFAULT 'OFF_DUTY';
 
 -- CreateTable
