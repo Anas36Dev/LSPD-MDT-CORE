@@ -14,11 +14,9 @@ out
 .env.*
 !.env.docker.example
 
-# Docker (inutile dans le contexte de build)
-Dockerfile
+# Docker : on garde docker-entrypoint.sh (copié explicitement par le Dockerfile).
 .dockerignore
 docker-compose.yml
-docker-entrypoint.sh
 
 # Divers
 *.log
