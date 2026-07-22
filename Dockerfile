@@ -34,7 +34,7 @@ RUN npm run build
 # ---- Runtime ----------------------------------------------------------------
 FROM base AS runner
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=3080
 ENV HOSTNAME=0.0.0.0
 
 # Utilisateur non-root.
@@ -50,10 +50,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
   && chown -R nextjs:nodejs /app
 
 USER nextjs
-EXPOSE 3000
+EXPOSE 3080
 
-# Health : le serveur répond (statut < 500) sur le port 3000.
+# Health : le serveur répond (statut < 500) sur le port 3080.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3080/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["docker-entrypoint.sh"]

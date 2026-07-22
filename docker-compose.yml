@@ -44,11 +44,11 @@ services:
         required: false
     environment:
       DATABASE_URL: mysql://root:${DB_PASSWORD:-lspd_root}@db:3306/${DB_NAME:-lspd_mdt}
-      APP_URL: ${APP_URL:-http://localhost:3000}
+      APP_URL: ${APP_URL:-http://localhost:3080}
       SEED_ON_START: ${SEED_ON_START:-true}
       NODE_ENV: production
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-3080}:3080"
     volumes:
       # Persiste les images uploadées (preuves, chat) hors de l'image.
       - uploads:/app/public/uploads

@@ -12,7 +12,7 @@ cd lspd-mdt
 cp .env.docker.example .env      # puis éditez .env (mot de passe DB, Discord…)
 docker compose up -d --build
 ```
-L'application est disponible sur http://localhost:3000 (ou `APP_PORT`).
+L'application est disponible sur http://localhost:3080 (ou `APP_PORT`).
 
 Au premier démarrage, le conteneur `app` :
 1. attend que MariaDB soit prête (healthcheck) ;
@@ -46,8 +46,8 @@ Toute la config passe par le `.env` (voir `.env.docker.example`) :
 |---|---|---|
 | `DB_PASSWORD` | mot de passe root MariaDB | `lspd_root` |
 | `DB_NAME` | nom de la base | `lspd_mdt` |
-| `APP_PORT` | port exposé sur l'hôte | `3000` |
-| `APP_URL` | URL publique (redirections, Discord) | `http://localhost:3000` |
+| `APP_PORT` | port exposé sur l'hôte | `3080` |
+| `APP_URL` | URL publique (redirections, Discord) | `http://localhost:3080` |
 | `SEED_ON_START` | rejoue le seed au démarrage | `true` |
 | `DISCORD_*` | connexion Discord (optionnelle) | vide |
 
