@@ -43,11 +43,14 @@ RUN addgroup --system --gid 1001 nodejs \
 
 # On copie l'application complète depuis le builder (app + node_modules avec
 # prisma CLI et tsx, nécessaires aux migrations et au seed au démarrage).
-COPY --from=builder /app ./
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# `--chown` fixe l'appartenance PENDANT la copie : un `chown -R /app` séparé
+# serait extrêmement lent (des dizaines de milliers de fichiers dans
+# node_modules) et recréerait une énorme couche.
+COPY --from=builder --chown=nextjs:nodejs /app ./
+COPY --chown=nextjs:nodejs docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
   && mkdir -p public/uploads/chat public/uploads/evidence \
-  && chown -R nextjs:nodejs /app
+  && chown -R nextjs:nodejs public/uploads
 
 USER nextjs
 EXPOSE 3080
