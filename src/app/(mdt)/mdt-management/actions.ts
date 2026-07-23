@@ -3,7 +3,7 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath } from "@/lib/revalidate";
 
 import { audit } from "@/lib/auth";
 import { db } from "@/lib/db";

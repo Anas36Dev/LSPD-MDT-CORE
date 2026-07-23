@@ -1,13 +1,10 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-
-import { revalidatePath } from "next/cache";
+import { revalidatePath } from "@/lib/revalidate";
 import { redirect } from "next/navigation";
 
 import { audit, getCurrentUser } from "@/lib/auth";
+import { saveDataUrl } from "@/lib/chat-upload";
 import { db } from "@/lib/db";
 import { assertPermission } from "@/lib/guard";
 import { canAccessChannel, channelByKey } from "@/lib/message-channels";
@@ -16,31 +13,6 @@ import { isCommandStaff, isPreviewing } from "@/lib/permissions";
 export type ChatState = { error?: string } | undefined;
 
 const fail = (error: string): ChatState => ({ error });
-
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads", "chat");
-const MAX_BYTES = 8 * 1024 * 1024;
-const EXT_BY_MIME: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/jpg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/bmp": "bmp",
-};
-
-async function saveDataUrl(dataUrl: string): Promise<string> {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl.trim());
-  if (!match) throw new Error("Image collée invalide.");
-  const ext = EXT_BY_MIME[match[1].toLowerCase()];
-  if (!ext) throw new Error("Format d'image non pris en charge.");
-  const buffer = Buffer.from(match[2], "base64");
-  if (buffer.length === 0) throw new Error("Image collée vide.");
-  if (buffer.length > MAX_BYTES) throw new Error("Image trop volumineuse (8 Mo max).");
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  const filename = `${randomUUID()}.${ext}`;
-  await writeFile(path.join(UPLOAD_DIR, filename), buffer);
-  return `/uploads/chat/${filename}`;
-}
 
 export async function sendGroupMessage(
   _state: ChatState,

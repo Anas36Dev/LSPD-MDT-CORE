@@ -603,6 +603,13 @@ exports.Prisma.GroupMessageScalarFieldEnum = {
   createdAt: 'createdAt'
 };
 
+exports.Prisma.ChannelReadScalarFieldEnum = {
+  id: 'id',
+  userId: 'userId',
+  channel: 'channel',
+  lastReadAt: 'lastReadAt'
+};
+
 exports.Prisma.LockerScalarFieldEnum = {
   id: 'id',
   name: 'name',
@@ -718,6 +725,7 @@ exports.Prisma.MessageScalarFieldEnum = {
   recipientId: 'recipientId',
   subject: 'subject',
   body: 'body',
+  imageUrl: 'imageUrl',
   readAt: 'readAt',
   createdAt: 'createdAt'
 };
@@ -1216,6 +1224,10 @@ exports.Prisma.GroupMessageOrderByRelevanceFieldEnum = {
   imageUrl: 'imageUrl'
 };
 
+exports.Prisma.ChannelReadOrderByRelevanceFieldEnum = {
+  channel: 'channel'
+};
+
 exports.Prisma.LockerOrderByRelevanceFieldEnum = {
   name: 'name',
   accessCode: 'accessCode'
@@ -1279,7 +1291,8 @@ exports.Prisma.AnnouncementOrderByRelevanceFieldEnum = {
 
 exports.Prisma.MessageOrderByRelevanceFieldEnum = {
   subject: 'subject',
-  body: 'body'
+  body: 'body',
+  imageUrl: 'imageUrl'
 };
 
 exports.Prisma.IaCaseOrderByRelevanceFieldEnum = {
@@ -1466,6 +1479,7 @@ exports.Prisma.ModelName = {
   Feedback: 'Feedback',
   MessageChannel: 'MessageChannel',
   GroupMessage: 'GroupMessage',
+  ChannelRead: 'ChannelRead',
   Locker: 'Locker',
   LockerItem: 'LockerItem',
   WeeklyMeeting: 'WeeklyMeeting',

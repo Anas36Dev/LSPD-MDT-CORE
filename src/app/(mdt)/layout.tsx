@@ -4,6 +4,7 @@ import { Bell, Eye, LogOut, MessageSquarePlus } from "lucide-react";
 
 import { AgentAvatar } from "@/components/agent-avatar";
 import { DutyHeartbeat } from "@/components/duty-heartbeat";
+import { RealtimeRefresher } from "@/components/realtime-refresher";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Badge } from "@/components/ui";
 import { findLogo } from "@/lib/brand";
@@ -199,6 +200,7 @@ export default async function MdtLayout({
       </div>
 
       <DutyHeartbeat onDuty={onDuty} />
+      <RealtimeRefresher />
     </div>
   );
 }

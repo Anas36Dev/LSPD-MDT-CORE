@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath } from "@/lib/revalidate";
 
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";

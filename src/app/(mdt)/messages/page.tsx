@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { MailOpen, Trash2 } from "lucide-react";
+import { ImageIcon, MailOpen, Trash2 } from "lucide-react";
 
 import { Badge, EmptyState, Panel, PanelHeader } from "@/components/ui";
 import { db } from "@/lib/db";
@@ -117,9 +117,16 @@ export default async function MessagesPage({
                         <Badge tone="blue">Nouveau</Badge>
                       ) : null}
                     </div>
-                    <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-mist-400">
-                      {m.body}
-                    </p>
+                    {m.body ? (
+                      <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-mist-400">
+                        {m.body}
+                      </p>
+                    ) : m.imageUrl ? (
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-sm text-mist-400">
+                        <ImageIcon className="h-3.5 w-3.5" />
+                        Image
+                      </p>
+                    ) : null}
                     <p className="mt-2 text-xs text-mist-500">
                       {m.sender.rank.name} {m.sender.firstName}{" "}
                       {m.sender.lastName} #{m.sender.badgeNumber} ·{" "}

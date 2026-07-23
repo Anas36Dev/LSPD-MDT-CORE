@@ -51,3 +51,6 @@ next-env.d.ts
 AGENTS.md
 CLAUDE.md
 README.md
+
+lspd_mdt.sql
+lspd_mdt_import.sql

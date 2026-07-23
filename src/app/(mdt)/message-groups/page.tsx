@@ -5,7 +5,7 @@ import { MessagesSquare } from "lucide-react";
 import { EmptyState, Panel } from "@/components/ui";
 import { db } from "@/lib/db";
 import { requireModule } from "@/lib/guard";
-import { accessibleChannels } from "@/lib/message-channels";
+import { accessibleChannels, unreadByChannel } from "@/lib/message-channels";
 import { isCommandStaff } from "@/lib/permissions";
 import { ChannelCreator } from "./create-channel-form";
 import { DeleteChannelButton } from "./delete-channel-button";
@@ -15,6 +15,7 @@ export const metadata: Metadata = { title: "Groupes de messages" };
 export default async function MessageGroupsPage() {
   const user = await requireModule("message-groups");
   const channels = await accessibleChannels(user);
+  const unread = await unreadByChannel(user.id, channels);
   const canManage = isCommandStaff(user);
 
   const [ranks, divisions, certifications, members] = canManage
@@ -105,8 +106,16 @@ export default async function MessageGroupsPage() {
                   href={`/message-groups/${ch.key}`}
                   className="flex min-w-0 flex-1 items-center gap-4 px-5 py-4 transition-colors hover:bg-ink-800/60"
                 >
-                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ink-600 bg-ink-850 text-badge-300">
+                  <span className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ink-600 bg-ink-850 text-badge-300">
                     <MessagesSquare className="h-5 w-5" />
+                    {unread[ch.key] > 0 ? (
+                      <span
+                        title={`${unread[ch.key]} message${unread[ch.key] > 1 ? "s" : ""} non lu${unread[ch.key] > 1 ? "s" : ""}`}
+                        className="absolute -right-1.5 -top-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-alert-600 px-1 text-[0.6rem] font-semibold text-white"
+                      >
+                        {unread[ch.key] > 9 ? "9+" : unread[ch.key]}
+                      </span>
+                    ) : null}
                   </span>
                   <p className="min-w-0 flex-1 text-sm font-medium text-mist-100">
                     {ch.name}

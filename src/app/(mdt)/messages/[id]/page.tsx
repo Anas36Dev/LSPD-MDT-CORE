@@ -102,10 +102,22 @@ export default async function MessagePage({
           ) : null}
         </div>
 
-        <div className="px-6 py-6">
-          <p className="text-sm leading-relaxed whitespace-pre-line text-mist-100">
-            {message.body}
-          </p>
+        <div className="space-y-4 px-6 py-6">
+          {message.body ? (
+            <p className="text-sm leading-relaxed whitespace-pre-line text-mist-100">
+              {message.body}
+            </p>
+          ) : null}
+          {message.imageUrl ? (
+            <a href={message.imageUrl} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={message.imageUrl}
+                alt="pièce jointe"
+                className="max-h-96 rounded-lg border border-ink-700"
+              />
+            </a>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2 border-t border-ink-700 px-6 py-4">

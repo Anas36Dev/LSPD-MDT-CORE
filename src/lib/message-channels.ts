@@ -132,3 +132,43 @@ export async function channelByKey(key: string): Promise<Channel | undefined> {
   const row = await db.messageChannel.findUnique({ where: { key } });
   return row ? toChannel(row) : undefined;
 }
+
+/** Marque un canal comme lu par l'agent (appelé à l'ouverture du canal). */
+export async function markChannelRead(userId: number, channelKey: string) {
+  await db.channelRead.upsert({
+    where: { userId_channel: { userId, channel: channelKey } },
+    create: { userId, channel: channelKey, lastReadAt: new Date() },
+    update: { lastReadAt: new Date() },
+  });
+}
+
+/**
+ * Nombre de messages non lus par canal pour un agent : messages postés par
+ * quelqu'un d'autre après sa dernière lecture du canal. Un canal jamais ouvert
+ * compte tous ses messages (aucune date de lecture enregistrée).
+ */
+export async function unreadByChannel(
+  userId: number,
+  channels: Channel[],
+): Promise<Record<string, number>> {
+  if (channels.length === 0) return {};
+  const reads = await db.channelRead.findMany({
+    where: { userId, channel: { in: channels.map((c) => c.key) } },
+  });
+  const lastRead = new Map(reads.map((r) => [r.channel, r.lastReadAt]));
+
+  const entries = await Promise.all(
+    channels.map(async (ch) => {
+      const seenAt = lastRead.get(ch.key);
+      const count = await db.groupMessage.count({
+        where: {
+          channel: ch.key,
+          senderId: { not: userId },
+          ...(seenAt ? { createdAt: { gt: seenAt } } : {}),
+        },
+      });
+      return [ch.key, count] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}

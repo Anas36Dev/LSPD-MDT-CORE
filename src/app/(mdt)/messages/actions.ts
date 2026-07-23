@@ -1,9 +1,10 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath } from "@/lib/revalidate";
 import { redirect } from "next/navigation";
 
 import { audit, getCurrentUser } from "@/lib/auth";
+import { saveDataUrl } from "@/lib/chat-upload";
 import { db } from "@/lib/db";
 import { assertPermission } from "@/lib/guard";
 import { notify } from "@/lib/notify";
@@ -23,10 +24,13 @@ export async function sendMessage(
     const recipientId = Number(formData.get("recipientId"));
     const subject = String(formData.get("subject") ?? "").trim();
     const body = String(formData.get("body") ?? "").trim();
+    const pasted = String(formData.get("image") ?? "");
 
     if (!recipientId) return fail("Sélectionnez un destinataire.");
     if (!subject) return fail("L'objet est obligatoire.");
-    if (!body) return fail("Le message est vide.");
+    if (!body && !pasted.startsWith("data:")) {
+      return fail("Ajoutez un message ou une image.");
+    }
     if (recipientId === user.id) {
       return fail("Vous ne pouvez pas vous écrire à vous-même.");
     }
@@ -37,8 +41,10 @@ export async function sendMessage(
       return fail("Ce compte n'est plus actif.");
     }
 
+    const imageUrl = pasted.startsWith("data:") ? await saveDataUrl(pasted) : null;
+
     await db.message.create({
-      data: { senderId: user.id, recipientId, subject, body },
+      data: { senderId: user.id, recipientId, subject, body, imageUrl },
     });
 
     await audit({

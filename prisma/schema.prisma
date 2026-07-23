@@ -302,6 +302,7 @@ model User {
   convocationsReceived     Convocation[]     @relation("ConvocationAgent")
   convocationsSent         Convocation[]     @relation("ConvocationSummoner")
   groupMessages            GroupMessage[]
+  channelReads             ChannelRead[]
   channelsCreated          MessageChannel[]  @relation("ChannelCreator")
   meetingsCreated          WeeklyMeeting[]
   gradeChanges             WeeklyGradeChange[]
@@ -1023,6 +1024,19 @@ model GroupMessage {
   @@index([channel, createdAt])
 }
 
+/// Dernière lecture d'un canal par un agent : sert à compter les messages non
+/// lus (bulle rouge à côté du canal). Une ligne par (agent, canal).
+model ChannelRead {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  channel    String
+  lastReadAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel])
+}
+
 /// Casier physique du poste : les agents y annoncent le dépôt d'objets.
 model Locker {
   id          Int      @id @default(autoincrement())
@@ -1211,6 +1225,7 @@ model Message {
   recipientId Int
   subject     String
   body        String    @db.Text
+  imageUrl    String?   @db.Text
   readAt      DateTime?
   createdAt   DateTime  @default(now())
 

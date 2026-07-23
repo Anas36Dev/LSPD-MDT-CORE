@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { CalendarClock, MapPin } from "lucide-react";
+import { CalendarClock, MapPin, Trash2 } from "lucide-react";
 
+import { ConfirmButton } from "@/components/confirm-button";
 import { Badge, EmptyState, Panel, PanelHeader } from "@/components/ui";
 import { db } from "@/lib/db";
 import { requireModule } from "@/lib/guard";
 import { formatDateTime } from "@/lib/utils";
-import { cancelConvocation } from "./actions";
+import { cancelConvocation, deleteConvocation } from "./actions";
 import { ConvocationForm } from "./forms";
 
 export const metadata: Metadata = { title: "Convocations" };
@@ -99,17 +100,34 @@ export default async function ConvocationsPage() {
                           {formatDateTime(c.scheduledAt)}
                         </Badge>
                       ) : null}
-                      {c.status === "PENDING" ? (
-                        <form action={cancelConvocation} className="ml-auto">
-                          <input type="hidden" name="id" value={c.id} />
-                          <button
-                            type="submit"
-                            className="rounded-md border border-ink-600 px-2.5 py-1 text-xs text-mist-500 transition-colors hover:border-alert-500/50 hover:text-alert-500"
-                          >
-                            Annuler
-                          </button>
-                        </form>
-                      ) : null}
+                      <div className="ml-auto flex items-center gap-2">
+                        {c.status === "PENDING" ? (
+                          <form action={cancelConvocation}>
+                            <input type="hidden" name="id" value={c.id} />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-ink-600 px-2.5 py-1 text-xs text-mist-500 transition-colors hover:border-alert-500/50 hover:text-alert-500"
+                            >
+                              Annuler
+                            </button>
+                          </form>
+                        ) : null}
+                        <ConfirmButton
+                          action={deleteConvocation}
+                          fields={{ id: c.id }}
+                          title="Supprimer la convocation"
+                          message={`Supprimer définitivement la convocation de ${c.agent.firstName} ${c.agent.lastName} ? Cette action est irréversible.`}
+                          confirmLabel="Supprimer"
+                          triggerTitle="Supprimer définitivement"
+                          triggerClassName="inline-flex items-center gap-1.5 rounded-md border border-ink-600 px-2.5 py-1 text-xs text-mist-500 transition-colors hover:border-alert-500/50 hover:text-alert-500"
+                          trigger={
+                            <>
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Supprimer
+                            </>
+                          }
+                        />
+                      </div>
                     </div>
                     <p className="mt-1.5 text-sm leading-relaxed text-mist-300">
                       {c.reason}

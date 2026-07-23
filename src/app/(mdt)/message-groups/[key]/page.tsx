@@ -4,7 +4,11 @@ import { ArrowLeft } from "lucide-react";
 
 import { db } from "@/lib/db";
 import { requireModule } from "@/lib/guard";
-import { canAccessChannel, channelByKey } from "@/lib/message-channels";
+import {
+  canAccessChannel,
+  channelByKey,
+  markChannelRead,
+} from "@/lib/message-channels";
 import { isCommandStaff } from "@/lib/permissions";
 import { ChannelMembers, type ChannelMember } from "./channel-members";
 import { ChannelCreator } from "../create-channel-form";
@@ -39,6 +43,9 @@ export default async function ChannelPage({
 
   const channel = await channelByKey(key);
   if (!channel || !canAccessChannel(user, channel)) notFound();
+
+  // Ouvrir le canal vaut lecture : la bulle de non-lus retombe à zéro.
+  await markChannelRead(user.id, channel.key);
 
   const [rows, memberRows] = await Promise.all([
     db.groupMessage.findMany({

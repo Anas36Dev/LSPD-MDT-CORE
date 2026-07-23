@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath } from "@/lib/revalidate";
 
 import { audit, getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -83,6 +83,30 @@ export async function cancelConvocation(formData: FormData) {
   await audit({
     userId: user.id,
     action: "CONVOCATION_CANCEL",
+    targetType: "Convocation",
+    targetId: id,
+  });
+
+  revalidatePath("/convocations");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Supprime définitivement une convocation, quel que soit son statut. Réservé au
+ * Command Staff / superviseurs (même habilitation que pour convoquer). À la
+ * différence de l'annulation, la convocation disparaît complètement de la liste.
+ */
+export async function deleteConvocation(formData: FormData) {
+  const user = await assertPermission(canConvene);
+  const id = Number(formData.get("id"));
+
+  const convocation = await db.convocation.findUnique({ where: { id } });
+  if (!convocation) return;
+
+  await db.convocation.delete({ where: { id } });
+  await audit({
+    userId: user.id,
+    action: "CONVOCATION_DELETE",
     targetType: "Convocation",
     targetId: id,
   });
